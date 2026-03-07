@@ -18,23 +18,55 @@ quote_verb_boolean_list = [quote + "|" for quote in quote_verbs if quote[-1:] in
 quote_verb_boolean_string = ''.join(quote_verb_boolean_list)
 quote_verb_boolean_string = quote_verb_boolean_string[:-1]
 
-re_quote_someone_said = \
-    r'(“[^“\n]+?[,?!]”) ([^\.!?]+?)[\n ]({cue_verbs})([^\.!?]*?)[\.,][\n ]{{0,2}}(“[\w\W]+?”){{0,1}}'.format(
-    cue_verbs= quote_verb_boolean_string)
-re_quote_said_someone = '(“[^“\n]+?[,?!]”)[\n ]({cue_verbs}) ([^\.!?]+?)[\.,](\s{{0,2}}“[^”]+?”){{0,1}}'.format(
-    cue_verbs=quote_verb_boolean_string)
-re_quote_someone_told_someone = \
-    '(“[^“\n]+?[,?!]”)[\n ]([^\.!?]*?) ({cue_verbs}) ([^\.!?]*?)[\.,][\n ]{{0,2}}(“[\w\W]+?”){{0,1}}'.format(
-    cue_verbs=quote_verb_boolean_string)
-re_quote_someone_said_colon = \
-    '([^“\n]+?) ({cue_verbs})( \w*?){{0,5}}: (“[\w\W]+?”){{1,1}}'.format(
-    cue_verbs=quote_verb_boolean_string)
-re_quote_someone_said_adding_colon = \
-    '([\w\W]+?) (“[\w\W]+?”)([-–\’\s,\w]*?) (adding)( \w*?){0,5}: (“[\w\W]+?”){1,1}'
+# This uses a 'Negative Lookahead' (?!...) to ensure the ' isn't just an apostrophe
+# inside a word like "it's" or "Santos's"
+any_quote = r'“[^”\n]{17,}?”'
 
-between_quotes = '“[^“”,]+?”'
-between_quotes_sentence_start = '$“[^“”]+?”'
-between_quotes_ends_with_comma = '“[^“”]+?,”'
+# 1. Someone Said: [Quote] [Speaker] [Verb]
+re_quote_someone_said = r'({quote})\s*[,]?\s*((?:\w+\s+){{1,5}})({cue_verbs})'.format(
+    quote=any_quote,
+    cue_verbs=quote_verb_boolean_string)
+
+# 2. Said Someone: [Quote] [Verb] [Speaker]
+re_quote_said_someone = r'({quote})\s+({cue_verbs})\s+((?:\w+\s+){{1,5}})'.format(
+    quote=any_quote,
+    cue_verbs=quote_verb_boolean_string)
+
+re_quote_someone_told_someone = r'({quote})\s+([^\.!?“"‘\']+?)\s+({cue_verbs})\s+([^\.!?“"‘\']+?)'.format(
+    quote=any_quote,
+    cue_verbs=quote_verb_boolean_string)
+
+# 4. Colon Style: [Speaker] [Verb] : [Quote]
+re_quote_someone_said_colon = r'([^“"‘\'\n\.!?]+?)\s+({cue_verbs})(?:\s+\w+){{0,5}}\s*:\s*({quote})'.format(
+    quote=any_quote,
+    cue_verbs=quote_verb_boolean_string)
+
+re_quote_someone_said_adding_colon = r'([^“"‘\'\n\.!?]+?)\s+({cue_verbs})\s+adding\s*:\s*({quote})'.format(
+    quote=any_quote,
+    cue_verbs=quote_verb_boolean_string)
+
+# Define the helper variables to keep the rest of the script happy
+between_quotes = any_quote
+between_quotes_sentence_start = r'^' + any_quote
+between_quotes_ends_with_comma = r'(?:“[^”\n]+?,”|"[^"\n]+?,"|‘[^’\n]+?,\’|\'[^\'\n]+?,\')'
+
+# re_quote_someone_said = \
+#     r'(“[^“\n]+?[,?!]”) ([^\.!?]+?)[\n ]({cue_verbs})([^\.!?]*?)[\.,][\n ]{{0,2}}(“[\w\W]+?”){{0,1}}'.format(
+#     cue_verbs= quote_verb_boolean_string)
+# re_quote_said_someone = '(“[^“\n]+?[,?!]”)[\n ]({cue_verbs}) ([^\.!?]+?)[\.,](\s{{0,2}}“[^”]+?”){{0,1}}'.format(
+#     cue_verbs=quote_verb_boolean_string)
+# re_quote_someone_told_someone = \
+#     '(“[^“\n]+?[,?!]”)[\n ]([^\.!?]*?) ({cue_verbs}) ([^\.!?]*?)[\.,][\n ]{{0,2}}(“[\w\W]+?”){{0,1}}'.format(
+#     cue_verbs=quote_verb_boolean_string)
+# re_quote_someone_said_colon = \
+#     '([^“\n]+?) ({cue_verbs})( \w*?){{0,5}}: (“[\w\W]+?”){{1,1}}'.format(
+#     cue_verbs=quote_verb_boolean_string)
+# re_quote_someone_said_adding_colon = \
+#     '([\w\W]+?) (“[\w\W]+?”)([-–\’\s,\w]*?) (adding)( \w*?){0,5}: (“[\w\W]+?”){1,1}'
+#
+# between_quotes = '“[^“”,]+?”'
+# between_quotes_sentence_start = '$“[^“”]+?”'
+# between_quotes_ends_with_comma = '“[^“”]+?,”'
 
 QUOTE_TYPES = {
     'someone_said': 1,
@@ -43,13 +75,21 @@ QUOTE_TYPES = {
     'someone_said_colon': 4,
     'someone_said_adding_colon': 5
 }
+# Update these inside utils/quote_extraction.py
 QUOTE_TYPES_PATTERNS = {
-    1: {'quote_text': 0, 'speaker': 1, 'quote_text_optional_second_part': -1},
-    2: {'quote_text': 0, 'speaker': 2, 'quote_text_optional_second_part': 3},
-    3: {'quote_text': 0, 'speaker': 1, 'quote_text_optional_second_part': 4},
-    4: {'quote_text': 3, 'speaker': 0},
-    5: {'quote_text': 0, 'quote_text_optional_second_part': 1, 'additional_cue': 3, 'quote_text_optional_third_part': 4}
+    1: {'quote_text': 0, 'speaker': 1}, # re_quote_someone_said
+    2: {'quote_text': 0, 'speaker': 2}, # re_quote_said_someone
+    3: {'quote_text': 0, 'speaker': 1}, # re_quote_someone_told_someone
+    4: {'quote_text': 2, 'speaker': 0}, # re_quote_someone_said_colon
+    5: {'quote_text': 2, 'speaker': 0}  # re_quote_someone_said_adding_colon
 }
+# QUOTE_TYPES_PATTERNS = {
+#     1: {'quote_text': 0, 'speaker': 1, 'quote_text_optional_second_part': -1},
+#     2: {'quote_text': 0, 'speaker': 2, 'quote_text_optional_second_part': 3},
+#     3: {'quote_text': 0, 'speaker': 1, 'quote_text_optional_second_part': 4},
+#     4: {'quote_text': 3, 'speaker': 0},
+#     5: {'quote_text': 0, 'quote_text_optional_second_part': 1, 'additional_cue': 3, 'quote_text_optional_third_part': 4}
+# }
 
 ########################################################
 ## Function definitions
@@ -153,6 +193,10 @@ def parse_sentence_quotes(sents, nlp_model, debug=False):
                 logging.debug(m_sentence_quote_indices)
                 logging.debug('sent: ', sent)
                 logging.debug('modified_sent: ', modified_sent)
+            if len(m_sentence_quote_indices) < 2:
+                if debug:
+                    logging.debug("Skipping sentence: missing matching quotation marks.")
+                continue
             m_first_quote_indices = m_sentence_quote_indices[0]
             m_second_quote_indices = m_sentence_quote_indices[1]
             m_end_of_first_quote = m_first_quote_indices[1] + 1

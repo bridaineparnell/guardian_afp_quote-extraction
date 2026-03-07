@@ -5,6 +5,7 @@ import spacy
 
 from utils.quote_extraction import extract_quotes_and_sentence_speaker
 
+
 # Utility functions
 def check_if_fname_exists(fname):
     import os

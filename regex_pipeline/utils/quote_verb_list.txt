@@ -195,6 +195,7 @@ rave
 raved
 raves
 raving
+reads
 reassert
 reasserted
 reasserting
@@ -239,6 +240,8 @@ retell
 retelling
 retells
 retold
+reveal
+revealed
 said
 say
 saying
