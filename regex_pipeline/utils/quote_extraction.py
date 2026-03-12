@@ -20,7 +20,7 @@ quote_verb_boolean_string = quote_verb_boolean_string[:-1]
 
 # This uses a 'Negative Lookahead' (?!...) to ensure the ' isn't just an apostrophe
 # inside a word like "it's" or "Santos's"
-any_quote = r'“[^”\n]{17,}?”'
+any_quote = r'“[^”]+?”'
 
 # 1. Someone Said: [Quote] [Speaker] [Verb]
 re_quote_someone_said = r'({quote})\s*[,]?\s*((?:\w+\s+){{1,5}})({cue_verbs})'.format(
@@ -41,9 +41,15 @@ re_quote_someone_said_colon = r'([^“"‘\'\n\.!?]+?)\s+({cue_verbs})(?:\s+\w+)
     quote=any_quote,
     cue_verbs=quote_verb_boolean_string)
 
+# 5. Adding Colon: [Speaker] [Verb] adding : [Quote]
 re_quote_someone_said_adding_colon = r'([^“"‘\'\n\.!?]+?)\s+({cue_verbs})\s+adding\s*:\s*({quote})'.format(
     quote=any_quote,
     cue_verbs=quote_verb_boolean_string)
+
+# 6. Floating Name : [Speaker] : [Quote]
+re_speaker_colon_quote = r'([A-Z][a-z]+(?:\s[A-Z][a-z]+){{0,2}})\s*:\s*({quote})'.format(
+    quote=any_quote)
+
 
 # Define the helper variables to keep the rest of the script happy
 between_quotes = any_quote
@@ -73,7 +79,8 @@ QUOTE_TYPES = {
     'said_someone': 2,
     'someone_told_someone': 3,
     'someone_said_colon': 4,
-    'someone_said_adding_colon': 5
+    'someone_said_adding_colon': 5,
+    'speaker_colon_quote': 6
 }
 # Update these inside utils/quote_extraction.py
 QUOTE_TYPES_PATTERNS = {
@@ -81,7 +88,8 @@ QUOTE_TYPES_PATTERNS = {
     2: {'quote_text': 0, 'speaker': 2}, # re_quote_said_someone
     3: {'quote_text': 0, 'speaker': 1}, # re_quote_someone_told_someone
     4: {'quote_text': 2, 'speaker': 0}, # re_quote_someone_said_colon
-    5: {'quote_text': 2, 'speaker': 0}  # re_quote_someone_said_adding_colon
+    5: {'quote_text': 2, 'speaker': 0},  # re_quote_someone_said_adding_colon
+    6: {'quote_text': 1, 'speaker': 0}
 }
 # QUOTE_TYPES_PATTERNS = {
 #     1: {'quote_text': 0, 'speaker': 1, 'quote_text_optional_second_part': -1},
@@ -329,15 +337,27 @@ def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
     all_regex_quotes = {}
     all_regex_sentences = {}
 
-    all_regex_quotes['someone_said'], all_regex_sentences['someone_said'] = extract_quotes_sentence_regex(re_quote_someone_said, text)
-    all_regex_quotes['said_someone'], all_regex_sentences['said_someone'] = extract_quotes_sentence_regex(re_quote_said_someone, text)
-    all_regex_quotes['someone_told_someone'],  all_regex_sentences['someone_told_someone'] = extract_quotes_sentence_regex(re_quote_someone_told_someone, text)
-    all_regex_quotes['someone_said_colon'],  all_regex_sentences['someone_said_colon'] = extract_quotes_sentence_regex(re_quote_someone_said_colon, text)
+    patterns = [
+        ('someone_said', re_quote_someone_said),
+        ('said_someone', re_quote_said_someone),
+        ('someone_told_someone', re_quote_someone_told_someone),
+        ('someone_said_colon', re_quote_someone_said_colon),
+        ('someone_said_adding_colon', re_quote_someone_said_adding_colon),
+        ('speaker_colon_quote', re_speaker_colon_quote)
+    ]
+
+    for qt_name, pattern in patterns:
+        all_regex_quotes[qt_name], all_regex_sentences[qt_name] = extract_quotes_sentence_regex(pattern, text)
+
+    # all_regex_quotes['someone_said'], all_regex_sentences['someone_said'] = extract_quotes_sentence_regex(re_quote_someone_said, text)
+    # all_regex_quotes['said_someone'], all_regex_sentences['said_someone'] = extract_quotes_sentence_regex(re_quote_said_someone, text)
+    # all_regex_quotes['someone_told_someone'],  all_regex_sentences['someone_told_someone'] = extract_quotes_sentence_regex(re_quote_someone_told_someone, text)
+    # all_regex_quotes['someone_said_colon'],  all_regex_sentences['someone_said_colon'] = extract_quotes_sentence_regex(re_quote_someone_said_colon, text)
     article_quote_indices = get_quote_indices(text)
     article_quote_texts = [text[quote_pair[0]:quote_pair[1] + 1] for quote_pair in article_quote_indices]
 
     if debug:
-        logging.debug('someone_saids:', all_regex_quotes['someone_said'])
+        logging.debug('someone_said:', all_regex_quotes['someone_said'])
         logging.debug('said_someones:', all_regex_quotes['said_someone'])
         logging.debug('someone_told_someones:', all_regex_quotes['someone_told_someone'])
         logging.debug('someone_said_colons:', all_regex_quotes['someone_said_colon'])
@@ -348,35 +368,67 @@ def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
     # Orphan quotes: quotes that are entire paragraphs that follow on from a non-quote sentence
     orphan_quotes = []
     for quote in article_quote_texts:
+        for sent_index, sent in enumerate(sentences):
+            if quote.strip() == sent.strip():
+                # Look at previous sentence for a potential speaker
+                if sent_index > 0:
+                    previous_sent = sentences[sent_index - 1]
+                    sent_ents = get_complete_ents_list(previous_sent, nlp_model)
 
-        for sent_index in range(len(sentences)):
-            sent = sentences[sent_index]
-            if quote == sent:
-                previous_sent = sentences[sent_index - 1]
-                sent_ents = get_complete_ents_list(previous_sent, nlp_model)
-                if '“' not in previous_sent and '”' not in previous_sent:
+                    # Try to find a Verb + Subject link
                     doc = nlp_model(previous_sent)
                     found = False
                     for tok in doc:
                         if (tok.dep_ == 'nsubj' and tok.head.pos_ == 'VERB' and tok.head.text in quote_verbs):
                             subtree = [t for t in tok.subtree]
                             idxes = [t.idx for t in subtree]
-                            speaker = previous_sent[idxes[0]:idxes[-1] + len(subtree[-1])]
-                            if speaker in ('He', 'She'):
-                                speaker = speaker.lower()
-                            quote_verb = tok.head.text
-                            orphan_quotes.append([quote, speaker, quote_verb, sent_index, sent_ents])
+                            # Extract the raw speaker (He/She/Name)
+                            speaker = previous_sent[idxes[0] - doc[0].idx: idxes[-1] - doc[0].idx + len(subtree[-1])]
+                            orphan_quotes.append([quote, speaker.strip(), tok.head.text, sent_index, sent_ents])
                             found = True
                             break
-                    if found == False:
+
+                    if not found:
+                        # Fallback: Just provide the quote and the entities from the prev sentence
                         orphan_quotes.append([quote, '', '', sent_index, sent_ents])
 
-
-    # Parse regex quotes
     regex_quotes = []
     for qt_name, matches in all_regex_quotes.items():
-        regex_quotes.extend(parse_regex_matches(matches, QUOTE_TYPES.get(qt_name)))
+        if matches:
+            # Uses the mapping dict we defined earlier to find which group is the speaker
+            type_id = QUOTE_TYPES.get(qt_name)
+            regex_quotes.extend(parse_regex_matches(matches, type_id))
 
+    # orphan_quotes = []
+    # for quote in article_quote_texts:
+    #
+    #     for sent_index in range(len(sentences)):
+    #         sent = sentences[sent_index]
+    #         if quote == sent:
+    #             previous_sent = sentences[sent_index - 1]
+    #             sent_ents = get_complete_ents_list(previous_sent, nlp_model)
+    #             if '“' not in previous_sent and '”' not in previous_sent:
+    #                 doc = nlp_model(previous_sent)
+    #                 found = False
+    #                 for tok in doc:
+    #                     if (tok.dep_ == 'nsubj' and tok.head.pos_ == 'VERB' and tok.head.text in quote_verbs):
+    #                         subtree = [t for t in tok.subtree]
+    #                         idxes = [t.idx for t in subtree]
+    #                         speaker = previous_sent[idxes[0]:idxes[-1] + len(subtree[-1])]
+    #                         if speaker in ('He', 'She'):
+    #                             speaker = speaker.lower()
+    #                         quote_verb = tok.head.text
+    #                         orphan_quotes.append([quote, speaker, quote_verb, sent_index, sent_ents])
+    #                         found = True
+    #                         break
+    #                 if found == False:
+    #                     orphan_quotes.append([quote, '', '', sent_index, sent_ents])
+
+
+    # # Parse regex quotes
+    # regex_quotes = []
+    # for qt_name, matches in all_regex_quotes.items():
+    #     regex_quotes.extend(parse_regex_matches(matches, QUOTE_TYPES.get(qt_name)))
 
     if debug:
         logging.debug('sentence_parse_quotes:')
@@ -385,18 +437,25 @@ def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
         logging.debug('regex_quotes:')
         logging.debug(regex_quotes)
 
-
-    extra_adding_regex_quotes = []
-    for sentence in sentences:
-        if len(get_quote_indices(sentence)) > 1:
-            extra_adding_regex_quote = re.findall(re_quote_someone_said_adding_colon, sentence)
-            if len(extra_adding_regex_quote) > 0: extra_adding_regex_quotes.extend(parse_regex_matches(extra_adding_regex_quote, QUOTE_TYPES['someone_said_adding_colon']))
-
-    logging.debug('extra_adding_regex_quotes:')
-    logging.debug(extra_adding_regex_quotes)
+    # extra_adding_regex_quotes = []
+    # for sentence in sentences:
+    #     if len(get_quote_indices(sentence)) > 1:
+    #         extra_adding_regex_quote = re.findall(re_quote_someone_said_adding_colon, sentence)
+    #         if len(extra_adding_regex_quote) > 0: extra_adding_regex_quotes.extend(parse_regex_matches(extra_adding_regex_quote, QUOTE_TYPES['someone_said_adding_colon']))
+    #
+    # logging.debug('extra_adding_regex_quotes:')
+    # logging.debug(extra_adding_regex_quotes)
 
     logging.debug('final regex_quotes:')
     logging.debug(regex_quotes)
+
+    # 4. Final Cleanup and Deduplication
+    combined_quotes = regex_quotes + orphan_quotes + sentence_parse_quotes
+
+    # Flatten sentences for the return
+    regex_sentences = [s for sublist in all_regex_sentences.values() for s in sublist]
+
+    return combined_quotes, list(set(regex_sentences))
 
     # Return quotes and sentences after removing duplicates
     regex_sentences = [_ for sublist in all_regex_sentences.values() for _ in sublist]

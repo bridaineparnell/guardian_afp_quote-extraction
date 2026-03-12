@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import spacy
+import coreferee
 from utils.quote_extraction import extract_quotes_and_sentence_speaker
 from utils.preprocessing import sentencise_text
 from tqdm import tqdm
@@ -15,7 +16,7 @@ df = pd.read_csv("main_dataset.csv")
 #
 #     stats = {"mojibake_fixes": 0, "quote_normalizations": 0}
 #
-#     # 1. Targeted Mojibake repair (Priority order matters)
+#     # Mojibake repair (Priority order matters)
 #     # The 'â€' often acts as a prefix for multiple types of marks
 #     mojibake_map = {
 #         "â€œ": "“",  # Opening double
@@ -34,14 +35,20 @@ df = pd.read_csv("main_dataset.csv")
 #             text = text.replace(bad, good)
 #             stats["mojibake_fixes"] += count
 #
-#     # 2. Smart Quote Normalization
+#     # Quote Normalization
 #     # Force double straight quotes to smart
-#     text, d_count = re.subn(r'"([^"\n]+?)"', r'“\1”', text)
+#     text, d_count = re.subn(r'"([^"]+?)"', r'“\1”', text)
 #
 #     # Single Quotes: 'Text' -> “Text” (Excluding contractions like I'm)
-#     text, s_count = re.subn(r"(^|\s)'([^'\n]+?)'($|[\s\.,!\?])", r'\1“\2”\3', text)
+#     text, s_count = re.subn(r"(\s|^)'(.+?)'(\s|$|[.,!?;])", r'\1“\2”\3', text)
 #
-#     stats["quote_normalizations"] = d_count + s_count
+#     # Double-Double Quotes: ""Text"" -> "Quote"
+#     text, dd_count = re.subn(r'""([^"]+?)""', r'“\1”', text)
+#
+#     # Any remaining "
+#     text, ar_count = re.subn(r'"', '”', text)
+#
+#     stats["quote_normalizations"] = d_count + s_count + dd_count + ar_count
 #
 #     return " ".join(text.split()), stats
 #
@@ -73,7 +80,7 @@ df = pd.read_csv("main_dataset.csv")
 #
 # # Save the cleaned text csv
 #
-# df.to_csv("clean_main_dataset.csv", index=False)
+# df.to_csv("clean_main_dataset_2.csv", index=False)
 
 # Read it back in
 
@@ -83,6 +90,7 @@ df = pd.read_csv("clean_main_dataset.csv")
 
 nlp_light = spacy.load("en_core_web_sm")
 nlp_trf = spacy.load("en_core_web_trf")
+nlp_trf.add_pipe("coreferee")
 
 # Load tqdm to follow progress
 
@@ -95,10 +103,11 @@ def chunk_text_by_words(text, chunk_size=400):
     Splits text into chunks of roughly 'chunk_size' words.
     Tries to split at double newlines first to preserve paragraph structure.
     """
+    # Check for empty docs
     if not text or pd.isna(text):
         return []
 
-    # Split by paragraphs first to avoid cutting a quote in half
+    # Split by paragraphs first
     paragraphs = text.split('\n\n')
     chunks = []
     current_chunk = []
@@ -121,82 +130,174 @@ def chunk_text_by_words(text, chunk_size=400):
     return chunks
 
 # Get quotes and speakers
+def resolve_with_coreferee(doc, raw_speaker_text, quote_text):
+    """
+    If pronoun, resolve the name, if it's already a name, keep it.
+    """
+    # Find the quote in the chunk
+    quote_start_char = doc.text.find(quote_text[:50])
+
+    target_token = None
+    min_dist = 9999
+
+    for token in doc:
+        if token.text.lower() == raw_speaker_text.lower():
+            # Calculate distance between potential speaker and the quote
+            dist = abs(token.idx - quote_start_char)
+            if dist < min_dist:
+                min_dist = dist
+                target_token = token
+
+        # Now that we have the nearest potential speaker,
+        # Coreferee looks at its internal chain map to find the name.
+    if target_token and doc._.coref_chains:
+        resolved = doc._.coref_chains.resolve(target_token)
+        if resolved:
+            # Returns 'Sam Altman' instead of 'he'
+            return " ".join([t.text for t in resolved])
+
+    # Fallback in case 'it' fails to resolve because it's an AI
+    if raw_speaker_text.lower() == 'it':
+        ai_keywords = ['chatgpt', 'bot', 'system', 'model', 'ai', 'algorithm', 'robot', 'chatbot', 'gemini']
+        # Look at the 10 tokens before the quote
+        for i in range(max(0, target_token.i - 10), target_token.i):
+            if doc[i].text.lower() in ai_keywords:
+                return doc[i].text
+
+    return raw_speaker_text
+
+def overlapping_chunks(text, chunk_size=400, overlap=100):
+    """
+    Splits text into chunks of `chunk_size` words,
+    with `overlap` words repeated between consecutive chunks.
+    """
+    words = text.split()
+    if len(words) <= chunk_size:
+        return [text]
+
+    chunks = []
+    # Step size is chunk_size minus overlap
+    step = chunk_size - overlap
+
+    for i in range(0, len(words), step):
+        chunk_words = words[i: i + chunk_size]
+        chunks.append(" ".join(chunk_words))
+
+        # Stop if we've reached the end of the text
+        if i + chunk_size >= len(words):
+            break
+
+    return chunks
+
+def clean_speaker_name(name_str):
+    """
+    Cleans and validates the speaker string. Returns 'Unknown' if the
+    string is noise or a placeholder.
+    """
+    if not name_str:
+        return "Unknown"
+
+    # Remove leading/trailing whitespace and common trailing punctuation
+    clean = name_str.strip().strip(',.:; ')
+
+    # If the regex grabbed a whole sentence (more than 5 words)
+    # Use spaCy to find the actual Person/Org inside that mess
+    if len(clean.split()) > 5:
+        temp_doc = nlp_trf(clean)
+        # Grab the first Person or Org found in the messy string
+        ents = [e.text for e in temp_doc.ents if e.label_ in ['PERSON', 'ORG','NORP', 'FAC', 'GPE', 'PRODUCT', 'WORK_OF_ART']]
+        if ents:
+            return ents[0]
+        else:
+            # If no entity, it's probably just noise (like "it was claimed")
+            return "Unknown"
+
+    # Stop-word filter
+    if clean.lower() in ['and', 'the', 'that', 'which', 'when']:
+        return "Unknown"
+
+    return clean
 
 def process_row(text):
     if not text or pd.isna(text):
-        return [], [] # Return two empty lists to avoid Series size errors
+        return [], [], {}, 0 # Return empty variables to avoid series size errors
 
-    article_doc = nlp_trf(text[:1500])  # Scan the first 1500 chars for context
-    people = [ent.text for ent in article_doc.ents if ent.label_ == "PERSON"]
-    main_character = people[0] if people else "Unknown Source"
+    # Create chunks of the right size for the transformer, but overlap so we don't miss anything
+    chunks = overlapping_chunks(text, chunk_size=400, overlap=100)
 
+    # Start lists for quotes and speakers
     quotes = []
     speakers = []
 
-    text_chunks = chunk_text_by_words(text, chunk_size=400)
+    # Run the quote extraction
+    for chunk in chunks:
+        doc = nlp_trf(chunk)
 
-    for chunk in text_chunks:
         results, _ = extract_quotes_and_sentence_speaker(chunk, nlp_trf, debug=False)
 
+        # Gather quotes and speakers
         for item in results:
-            raw_s = item.speaker if hasattr(item, 'speaker') else item[1]
-            quote_text = item.quote_text if hasattr(item, 'quote_text') else item[0]
+            q = item.quote_text if hasattr(item, 'quote_text') else item[0]
+            s = item.speaker if hasattr(item, 'speaker') else item[1]
 
-            final_s = raw_s.strip()
-            speaker = nlp_trf(final_s)
+            # Hand off resolution to Coreferee
+            resolved_s = resolve_with_coreferee(doc, s, q)
 
-            valid = ['PERSON', 'ORG', 'NORP', 'FAC', 'GPE']
-            is_real = any(ent.label_ in valid for ent in speaker.ents)
-            is_pron = speaker.text.lower() in ['he', 'she', 'they', 'it', 'who']
+            # Final polish (Remove 'and', 'the', extra commas)
+            final_s = clean_speaker_name(resolved_s)
 
-            words = speaker.text.lower().split()
-            if len(words) == 1 and words[0] in ['and', 'the', 'a', 'an', 'but', 'or']:
-                final_speaker = "Unknown"
+            quotes.append(q)
+            speakers.append(final_s)
 
-            elif not is_real and not is_pron:
-                persons = [ent.text for ent in speaker.ents if ent.label_ == "PERSON"]
-                if persons:
-                    speaker = persons[0]
-                else:
-                    speaker = f"{speaker} (Unknown)"
+    # Deduplicate across the whole article
+    quote_map = {}
+    for q, s in zip(quotes, speakers):
+        if q not in quote_map:
+            quote_map[q] = []
+        quote_map[q].append(s)
 
-            if is_pron:
-                speaker = f"{speaker} (likely {main_character})"
-                pass
+    final_quotes = []
+    final_speakers = []
+    matched = {}
 
-            quotes.append(quote_text)
-            speakers.append(speaker)
+    # Find the best speaker
 
-    # For when running checks
-    # status = "✅" if quotes else "❌"
-    # print(f"{status} Found {len(quotes)} quotes in this article.")
+    for q_text, s_list in quote_map.items():
+        pronouns = {'he', 'she', 'they', 'it', 'who'}
+        candidates = [name for name in s_list if "Unknown" not in name]
 
-    combined = list(zip(quotes, speakers))
+        if not candidates:
+            best_speaker = "Unknown"
+        else:
+            best_speaker = sorted(candidates, key=lambda x: (x.lower() not in pronouns, len(x)), reverse=True)[0]
 
-    unique = list(set(combined))
+        final_quotes.append(q_text)
+        final_speakers.append(best_speaker)
+        matched[q_text] = best_speaker
 
-    if unique:
-        quotes, speakers = zip(*unique)
-    else:
-        quotes, speakers = [], []
+    # For checks
+    status_icon = "✅" if final_quotes else "❌"
+    # Use .ljust or slicing to keep the title short in the console
+    print(f"{status_icon} Quotes: {len(final_quotes):02d} | Text: {text[:50].strip()}...")
 
-    return list(quotes), list(speakers)
+    return final_quotes, final_speakers, matched, len(final_quotes)
+
 
 # Checks
 
-# df_sample = df.sample(n=10).copy()
-# df_sample[['quotes', 'speakers']] = df_sample['body_text'].progress_apply(
-#     lambda x: pd.Series(process_row(x))
-# )
-# pd.set_option('display.max_columns', None)
-# print(df_sample[['news_title', 'quotes', 'speakers']])
-#
-# df_sample.to_csv("df_sample.csv", index=False)
+df_sample = df.sample(n=10).copy()
+df_sample[['quotes', 'speakers', 'attribution', 'quote_count']] = df_sample['body_text'].progress_apply(
+    lambda x: pd.Series(process_row(x))
+)
+pd.set_option('display.max_columns', None)
+print(df_sample[['news_title', 'quotes', 'speakers', 'attribution', 'quote_count']])
+
+df_sample.to_csv("df_sample.csv", index=False)
 
 # Run on main
 
-df[['quotes', 'speakers']] = df['body_text'].progress_apply(lambda x: pd.Series(process_row(x)))
-
-# # Save results
-df.to_csv("quotes_speakers_main.csv", index=False)
-print("Finished! Results saved")
+# df[['quotes', 'speakers']] = df['body_text'].progress_apply(lambda x: pd.Series(process_row(x)))
+#
+# # # Save results
+# df.to_csv("quotes_speakers_main.csv", index=False)
+# print("Finished! Results saved")
