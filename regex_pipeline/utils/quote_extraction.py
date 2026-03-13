@@ -18,8 +18,7 @@ quote_verb_boolean_list = [quote + "|" for quote in quote_verbs if quote[-1:] in
 quote_verb_boolean_string = ''.join(quote_verb_boolean_list)
 quote_verb_boolean_string = quote_verb_boolean_string[:-1]
 
-# This uses a 'Negative Lookahead' (?!...) to ensure the ' isn't just an apostrophe
-# inside a word like "it's" or "Santos's"
+# All of this regex changed from the original after iterations
 any_quote = r'“[^”]+?”'
 
 # 1. Someone Said: [Quote] [Speaker] [Verb]
@@ -32,6 +31,7 @@ re_quote_said_someone = r'({quote})\s+({cue_verbs})\s+((?:\w+\s+){{1,5}})'.forma
     quote=any_quote,
     cue_verbs=quote_verb_boolean_string)
 
+# 3. Someone Told Someone: [Speaker] [Verb] [Quote]
 re_quote_someone_told_someone = r'({quote})\s+([^\.!?“"‘\']+?)\s+({cue_verbs})\s+([^\.!?“"‘\']+?)'.format(
     quote=any_quote,
     cue_verbs=quote_verb_boolean_string)
@@ -46,6 +46,7 @@ re_quote_someone_said_adding_colon = r'([^“"‘\'\n\.!?]+?)\s+({cue_verbs})\s+
     quote=any_quote,
     cue_verbs=quote_verb_boolean_string)
 
+# This pattern added
 # 6. Floating Name : [Speaker] : [Quote]
 re_speaker_colon_quote = r'([A-Z][a-z]+(?:\s[A-Z][a-z]+){{0,2}})\s*:\s*({quote})'.format(
     quote=any_quote)
@@ -56,6 +57,7 @@ between_quotes = any_quote
 between_quotes_sentence_start = r'^' + any_quote
 between_quotes_ends_with_comma = r'(?:“[^”\n]+?,”|"[^"\n]+?,"|‘[^’\n]+?,\’|\'[^\'\n]+?,\')'
 
+# # This was the original regex before alterations and added pattern
 # re_quote_someone_said = \
 #     r'(“[^“\n]+?[,?!]”) ([^\.!?]+?)[\n ]({cue_verbs})([^\.!?]*?)[\.,][\n ]{{0,2}}(“[\w\W]+?”){{0,1}}'.format(
 #     cue_verbs= quote_verb_boolean_string)
@@ -80,17 +82,19 @@ QUOTE_TYPES = {
     'someone_told_someone': 3,
     'someone_said_colon': 4,
     'someone_said_adding_colon': 5,
-    'speaker_colon_quote': 6
+    'speaker_colon_quote': 6 # This added
 }
 # Update these inside utils/quote_extraction.py
+# These patterns updated
 QUOTE_TYPES_PATTERNS = {
     1: {'quote_text': 0, 'speaker': 1}, # re_quote_someone_said
     2: {'quote_text': 0, 'speaker': 2}, # re_quote_said_someone
     3: {'quote_text': 0, 'speaker': 1}, # re_quote_someone_told_someone
     4: {'quote_text': 2, 'speaker': 0}, # re_quote_someone_said_colon
     5: {'quote_text': 2, 'speaker': 0},  # re_quote_someone_said_adding_colon
-    6: {'quote_text': 1, 'speaker': 0}
+    6: {'quote_text': 1, 'speaker': 0} # This added
 }
+# These were the original patterns
 # QUOTE_TYPES_PATTERNS = {
 #     1: {'quote_text': 0, 'speaker': 1, 'quote_text_optional_second_part': -1},
 #     2: {'quote_text': 0, 'speaker': 2, 'quote_text_optional_second_part': 3},
@@ -298,11 +302,11 @@ def extract_quotes_sentence_regex(pattern, text):
         sentences.append(text[match.start():match.end()])
     return groups, sentences
 
+# This code altered to adapt to new patterns
 def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
-    """ Takes the pre-procsessed text of an article and returns a dictionary of attributed quotes, 
+    """ Takes the pre-processed text of an article and returns a dictionary of attributed quotes,
         unattributed_quotes and quote marks only (everything else between quotes)
-        
-        
+
         Uses: 
         1) The regular expressions defined above to capture well-defined quotes
         2) The parse_sentence_quotes function to capture quote fragments
@@ -311,9 +315,7 @@ def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
         
         For the regular expression quotes, if the sentence is also parsed well, it replaces the speaker from the 
         regex quote with that from the sentence parsing because it includes less noise.
-        
-        
-        
+
         :param sents: the pre-processed text of an article split up into sentences
         :param nlp: spacy model
         
@@ -337,6 +339,7 @@ def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
     all_regex_quotes = {}
     all_regex_sentences = {}
 
+    # New code
     patterns = [
         ('someone_said', re_quote_someone_said),
         ('said_someone', re_quote_said_someone),
@@ -349,6 +352,7 @@ def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
     for qt_name, pattern in patterns:
         all_regex_quotes[qt_name], all_regex_sentences[qt_name] = extract_quotes_sentence_regex(pattern, text)
 
+    # Old code here
     # all_regex_quotes['someone_said'], all_regex_sentences['someone_said'] = extract_quotes_sentence_regex(re_quote_someone_said, text)
     # all_regex_quotes['said_someone'], all_regex_sentences['said_someone'] = extract_quotes_sentence_regex(re_quote_said_someone, text)
     # all_regex_quotes['someone_told_someone'],  all_regex_sentences['someone_told_someone'] = extract_quotes_sentence_regex(re_quote_someone_told_someone, text)
@@ -366,6 +370,7 @@ def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
     sentence_parse_quotes = parse_sentence_quotes(sentences, nlp_model)
 
     # Orphan quotes: quotes that are entire paragraphs that follow on from a non-quote sentence
+    # This code updated
     orphan_quotes = []
     for quote in article_quote_texts:
         for sent_index, sent in enumerate(sentences):
@@ -399,6 +404,7 @@ def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
             type_id = QUOTE_TYPES.get(qt_name)
             regex_quotes.extend(parse_regex_matches(matches, type_id))
 
+    # Old code here
     # orphan_quotes = []
     # for quote in article_quote_texts:
     #
@@ -449,7 +455,7 @@ def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
     logging.debug('final regex_quotes:')
     logging.debug(regex_quotes)
 
-    # 4. Final Cleanup and Deduplication
+    # New code here - Final Cleanup and Deduplication
     combined_quotes = regex_quotes + orphan_quotes + sentence_parse_quotes
 
     # Flatten sentences for the return
@@ -457,6 +463,6 @@ def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
 
     return combined_quotes, list(set(regex_sentences))
 
-    # Return quotes and sentences after removing duplicates
+    # Old code - Return quotes and sentences after removing duplicates
     regex_sentences = [_ for sublist in all_regex_sentences.values() for _ in sublist]
     return list(set(regex_quotes)) + list(set(extra_adding_regex_quotes)) + orphan_quotes, list(set(regex_sentences))

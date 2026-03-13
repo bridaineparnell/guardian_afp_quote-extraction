@@ -1,19 +1,49 @@
 import os
-import pandas as pd
+import sys
 import spacy
+
+# Commands to ensure cluster is correctly working
+try:
+    import cupy
+    import cupyx
+    print("CuPy check: Success")
+except ImportError:
+    print("CuPy check: Failed")
+
+try:
+    # Check if Cupy can see the device before spacy tries
+    device_count = cupy.cuda.runtime.getDeviceCount()
+    print(f"Cupy sees {device_count} GPU device(s).")
+
+    if device_count > 0:
+        spacy.require_gpu()
+        print("Spacy GPU: Active ✅")
+    else:
+        print("Spacy GPU: No devices found by Cupy ❌")
+except Exception as e:
+    print(f"Spacy GPU: Failed ❌ ({e})")
+
+# Import packages
+
+import pandas as pd
 import coreferee
 from utils.quote_extraction import extract_quotes_and_sentence_speaker
 from utils.preprocessing import sentencise_text
 from tqdm import tqdm
 import re
 
-df = pd.read_csv("main_dataset.csv")
+# df = pd.read_csv("main_dataset.csv")
 
 # First clean the text
 
 # def text_repair(text):
+#       """
+#       Standardise the way quotes look across the set
+#       and sort out text encoding issues
+#       """
+#     # Safety code
 #     if not isinstance(text, str): return ""
-#
+#     # Monitor the progress
 #     stats = {"mojibake_fixes": 0, "quote_normalizations": 0}
 #
 #     # Mojibake repair (Priority order matters)
@@ -55,9 +85,15 @@ df = pd.read_csv("main_dataset.csv")
 # report = {"processed_rows": 0, "mojibake": 0, "quotes": 0}
 #
 # def clean_and_track(text):
+#       """
+#       Function to iterate through and clean the text
+#       while tracking the progress
+#       """
+#     # Safety code
 #     if not isinstance(text, str) or len(text.strip()) == 0:
 #         return text
-#
+
+#     # Run the cleanup and gather the stats
 #     cleaned, stats = text_repair(text)
 #
 #     # Update the report tracker
@@ -67,9 +103,11 @@ df = pd.read_csv("main_dataset.csv")
 #
 #     return cleaned
 #
+# # Run on the df
 # print("Starting cleanup...")
 # df['body_text'] = df['body_text'].apply(clean_and_track)
 #
+# # Report results of cleanup
 # print("\n" + "="*40)
 # print("FINAL CLEANUP REPORT")
 # print("="*40)
@@ -84,11 +122,11 @@ df = pd.read_csv("main_dataset.csv")
 
 # Read it back in
 
-df = pd.read_csv("clean_main_dataset.csv")
+df = pd.read_csv("clean_main_dataset_2.csv")
 
-# Load nlp models
+# Load nlp models (no need to load _lg, coref calls this)
 
-nlp_light = spacy.load("en_core_web_sm")
+nlp_light = spacy.load('en_core_web_sm')
 nlp_trf = spacy.load("en_core_web_trf")
 nlp_trf.add_pipe("coreferee")
 
@@ -96,49 +134,21 @@ nlp_trf.add_pipe("coreferee")
 
 tqdm.pandas(desc="Extracting Quotes")
 
-# Break the text up so it can be processed at <512 tokens
-
-def chunk_text_by_words(text, chunk_size=400):
-    """
-    Splits text into chunks of roughly 'chunk_size' words.
-    Tries to split at double newlines first to preserve paragraph structure.
-    """
-    # Check for empty docs
-    if not text or pd.isna(text):
-        return []
-
-    # Split by paragraphs first
-    paragraphs = text.split('\n\n')
-    chunks = []
-    current_chunk = []
-    current_count = 0
-
-    for para in paragraphs:
-        para_count = len(para.split())
-        if current_count + para_count <= chunk_size:
-            current_chunk.append(para)
-            current_count += para_count
-        else:
-            if current_chunk:
-                chunks.append("\n\n".join(current_chunk))
-            current_chunk = [para]
-            current_count = para_count
-
-    if current_chunk:
-        chunks.append("\n\n".join(current_chunk))
-
-    return chunks
-
 # Get quotes and speakers
 def resolve_with_coreferee(doc, raw_speaker_text, quote_text):
     """
-    If pronoun, resolve the name, if it's already a name, keep it.
+    If pronoun, resolve the name,
+    if it's already a name, keep it.
     """
+    # Safety check
+    if not raw_speaker_text or not doc._.coref_chains:
+        return raw_speaker_text
+
     # Find the quote in the chunk
     quote_start_char = doc.text.find(quote_text[:50])
 
     target_token = None
-    min_dist = 9999
+    min_dist = 9999999
 
     for token in doc:
         if token.text.lower() == raw_speaker_text.lower():
@@ -148,16 +158,19 @@ def resolve_with_coreferee(doc, raw_speaker_text, quote_text):
                 min_dist = dist
                 target_token = token
 
+    if target_token is None:
+        return raw_speaker_text
+
         # Now that we have the nearest potential speaker,
         # Coreferee looks at its internal chain map to find the name.
-    if target_token and doc._.coref_chains:
-        resolved = doc._.coref_chains.resolve(target_token)
-        if resolved:
-            # Returns 'Sam Altman' instead of 'he'
-            return " ".join([t.text for t in resolved])
+    resolved = doc._.coref_chains.resolve(target_token)
+
+    if resolved:
+        # Returns 'Sam Altman' instead of 'he'
+        return " ".join([t.text for t in resolved])
 
     # Fallback in case 'it' fails to resolve because it's an AI
-    if raw_speaker_text.lower() == 'it':
+    if target_token and raw_speaker_text.lower() == 'it':
         ai_keywords = ['chatgpt', 'bot', 'system', 'model', 'ai', 'algorithm', 'robot', 'chatbot', 'gemini']
         # Look at the 10 tokens before the quote
         for i in range(max(0, target_token.i - 10), target_token.i):
@@ -166,10 +179,12 @@ def resolve_with_coreferee(doc, raw_speaker_text, quote_text):
 
     return raw_speaker_text
 
+# Break the text up so it can be processed at <512 tokens, but overlap so we don't miss bits
+
 def overlapping_chunks(text, chunk_size=400, overlap=100):
     """
     Splits text into chunks of `chunk_size` words,
-    with `overlap` words repeated between consecutive chunks.
+    with `overlap` to capture across chunks.
     """
     words = text.split()
     if len(words) <= chunk_size:
@@ -191,9 +206,10 @@ def overlapping_chunks(text, chunk_size=400, overlap=100):
 
 def clean_speaker_name(name_str):
     """
-    Cleans and validates the speaker string. Returns 'Unknown' if the
-    string is noise or a placeholder.
+    Cleans and validates the speaker text.
+    Returns 'Unknown' if the text grabbed is noise or a placeholder.
     """
+    # Safety code
     if not name_str:
         return "Unknown"
 
@@ -201,10 +217,10 @@ def clean_speaker_name(name_str):
     clean = name_str.strip().strip(',.:; ')
 
     # If the regex grabbed a whole sentence (more than 5 words)
-    # Use spaCy to find the actual Person/Org inside that mess
+    # Use spacy to find the actual Person/Org inside that mess
     if len(clean.split()) > 5:
-        temp_doc = nlp_trf(clean)
-        # Grab the first Person or Org found in the messy string
+        temp_doc = nlp_light(clean)
+        # Grab the first entity found in the messy string
         ents = [e.text for e in temp_doc.ents if e.label_ in ['PERSON', 'ORG','NORP', 'FAC', 'GPE', 'PRODUCT', 'WORK_OF_ART']]
         if ents:
             return ents[0]
@@ -219,10 +235,18 @@ def clean_speaker_name(name_str):
     return clean
 
 def process_row(text):
+    """
+    Go through the df row by row, grabbing the articles
+    chunk them, get the quotes and speakers
+    throw the speakers to coref to resolve
+    return two lists of quotes and speakers
+    and a dictionary of attributed quotes:speaker
+    """
+    # Safety code
     if not text or pd.isna(text):
         return [], [], {}, 0 # Return empty variables to avoid series size errors
 
-    # Create chunks of the right size for the transformer, but overlap so we don't miss anything
+    # Create chunks <512 for the transformer, but overlap so we don't miss anything
     chunks = overlapping_chunks(text, chunk_size=400, overlap=100)
 
     # Start lists for quotes and speakers
@@ -243,13 +267,13 @@ def process_row(text):
             # Hand off resolution to Coreferee
             resolved_s = resolve_with_coreferee(doc, s, q)
 
-            # Final polish (Remove 'and', 'the', extra commas)
+            # Clean up speakers
             final_s = clean_speaker_name(resolved_s)
 
             quotes.append(q)
             speakers.append(final_s)
 
-    # Deduplicate across the whole article
+    # Deduplicate quotes across the whole article
     quote_map = {}
     for q, s in zip(quotes, speakers):
         if q not in quote_map:
@@ -275,29 +299,28 @@ def process_row(text):
         final_speakers.append(best_speaker)
         matched[q_text] = best_speaker
 
-    # For checks
+    # Monitor the progress
     status_icon = "✅" if final_quotes else "❌"
-    # Use .ljust or slicing to keep the title short in the console
-    print(f"{status_icon} Quotes: {len(final_quotes):02d} | Text: {text[:50].strip()}...")
+    print(f"{status_icon} Quotes: {len(final_quotes)}")
 
     return final_quotes, final_speakers, matched, len(final_quotes)
 
 
-# Checks
+# Run on a sample first to iterate on regex and cleaning and to debug
 
-df_sample = df.sample(n=10).copy()
-df_sample[['quotes', 'speakers', 'attribution', 'quote_count']] = df_sample['body_text'].progress_apply(
-    lambda x: pd.Series(process_row(x))
-)
-pd.set_option('display.max_columns', None)
-print(df_sample[['news_title', 'quotes', 'speakers', 'attribution', 'quote_count']])
-
-df_sample.to_csv("df_sample.csv", index=False)
-
-# Run on main
-
-# df[['quotes', 'speakers']] = df['body_text'].progress_apply(lambda x: pd.Series(process_row(x)))
+# df_sample = df.sample(n=10).copy()
+# df_sample[['quotes', 'speakers', 'attribution', 'quote_count']] = df_sample['body_text'].progress_apply(
+#     lambda x: pd.Series(process_row(x))
+# )
+# pd.set_option('display.max_columns', None)
+# print(df_sample[['news_title', 'quotes', 'speakers', 'attribution', 'quote_count']])
 #
-# # # Save results
-# df.to_csv("quotes_speakers_main.csv", index=False)
-# print("Finished! Results saved")
+# df_sample.to_csv("df_sample.csv", index=False)
+
+# Run on clean dataset and save results
+
+df[['quotes', 'speakers', 'attribution', 'quote_count']] = df['body_text'].progress_apply(lambda x: pd.Series(process_row(x)))
+
+# # Save results
+df.to_csv("quotes_speakers_coref.csv", index=False)
+print("Finished! Results saved")
