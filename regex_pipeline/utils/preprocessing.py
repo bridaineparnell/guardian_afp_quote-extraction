@@ -55,7 +55,7 @@ def remove_all_html(text):
     text = text.replace('”.“', '”. “')
 
     # regularise single quote marks for names like O'Grady
-    text = text.replace("’", "'").replace("‘", "'")  ##.replace("“", '"').replace("”", '"')
+    #text = text.replace("’", "'").replace("‘", "'")  ##.replace("“", '"').replace("”", '"')
 
     return text
 

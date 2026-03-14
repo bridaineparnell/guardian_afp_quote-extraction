@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=quotes_ex
 #SBATCH --partition=ICF-Free
-#SBATCH --nodelist=scotia08
+#SBATCH --nodelist=landonia05
 #SBATCH --gres=gpu:1
 #SBATCH --time=12:00:00
 #SBATCH --mem=64G

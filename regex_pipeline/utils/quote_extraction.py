@@ -46,10 +46,14 @@ re_quote_someone_said_adding_colon = r'([^“"‘\'\n\.!?]+?)\s+({cue_verbs})\s+
     quote=any_quote,
     cue_verbs=quote_verb_boolean_string)
 
-# This pattern added
+# These patterns added
 # 6. Floating Name : [Speaker] : [Quote]
 re_speaker_colon_quote = r'([A-Z][a-z]+(?:\s[A-Z][a-z]+){{0,2}})\s*:\s*({quote})'.format(
     quote=any_quote)
+
+# 7. Transcript Style: [Speaker]: [Text] (No quotation marks required)
+# This looks for a Capitalized Name at the start of a line/sentence followed by a colon
+re_transcript_style = r'(?:^|\n)([A-Z][a-z]+(?:\s[A-Z][a-z]+){0,2})\s*:\s*([^“"‘\'\n\.!?]+)'
 
 
 # Define the helper variables to keep the rest of the script happy
@@ -82,7 +86,8 @@ QUOTE_TYPES = {
     'someone_told_someone': 3,
     'someone_said_colon': 4,
     'someone_said_adding_colon': 5,
-    'speaker_colon_quote': 6 # This added
+    'speaker_colon_quote': 6, # This added
+    'transcript_style': 7 # This added
 }
 # Update these inside utils/quote_extraction.py
 # These patterns updated
@@ -92,7 +97,8 @@ QUOTE_TYPES_PATTERNS = {
     3: {'quote_text': 0, 'speaker': 1}, # re_quote_someone_told_someone
     4: {'quote_text': 2, 'speaker': 0}, # re_quote_someone_said_colon
     5: {'quote_text': 2, 'speaker': 0},  # re_quote_someone_said_adding_colon
-    6: {'quote_text': 1, 'speaker': 0} # This added
+    6: {'quote_text': 1, 'speaker': 0}, # This added
+    7: {'quote_text': 1, 'speaker': 0} # This added
 }
 # These were the original patterns
 # QUOTE_TYPES_PATTERNS = {
@@ -346,7 +352,8 @@ def extract_quotes_and_sentence_speaker(text, nlp_model, debug=False):
         ('someone_told_someone', re_quote_someone_told_someone),
         ('someone_said_colon', re_quote_someone_said_colon),
         ('someone_said_adding_colon', re_quote_someone_said_adding_colon),
-        ('speaker_colon_quote', re_speaker_colon_quote)
+        ('speaker_colon_quote', re_speaker_colon_quote),
+        ('transcript_style', re_transcript_style)
     ]
 
     for qt_name, pattern in patterns:

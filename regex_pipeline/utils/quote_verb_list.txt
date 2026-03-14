@@ -44,6 +44,10 @@ brand
 branded
 brands
 branding
+chat
+chatted
+chatting
+chats
 claim
 claimed
 claiming
@@ -68,6 +72,8 @@ continue
 continued
 continues
 continuing
+converse
+conversed
 convince
 convinced
 convinces
@@ -128,6 +134,10 @@ explaining
 explains
 finding
 finds
+generate
+generates
+generating
+generated
 highlight
 highlighted
 highlighting
@@ -156,6 +166,10 @@ mention
 mentioned
 mentioning
 mentions
+messaged
+message
+messages
+messaging
 note
 noted
 notes
@@ -164,6 +178,10 @@ notifies
 notify
 notifying
 noting
+output
+outputted
+outputs
+outputting
 persist
 persisted
 persisting
@@ -172,6 +190,10 @@ point
 pointed
 pointing
 points
+post
+posts
+posted
+posting
 preach
 preached
 preaches
@@ -191,6 +213,10 @@ promise
 promising
 promised
 promises
+prompt
+prompted
+prompts
+prompting
 rave
 raved
 raves
@@ -240,6 +266,10 @@ retell
 retelling
 retells
 retold
+return
+returns
+returned
+returning
 reveal
 revealed
 said

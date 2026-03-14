@@ -33,14 +33,14 @@ from tqdm import tqdm
 import re
 
 # df = pd.read_csv("main_dataset.csv")
-
-# First clean the text
-
+#
+# # First clean the text
+#
 # def text_repair(text):
-#       """
-#       Standardise the way quotes look across the set
-#       and sort out text encoding issues
-#       """
+#     """
+#     Standardise the way quotes look across the set
+#     and sort out text encoding issues
+#     """
 #     # Safety code
 #     if not isinstance(text, str): return ""
 #     # Monitor the progress
@@ -66,11 +66,18 @@ import re
 #             stats["mojibake_fixes"] += count
 #
 #     # Quote Normalization
+#
+#     # Pre - Normalization: Standardize complex endings(e.g., ".' or '." to.”)
+#     text, w_count = re.subn(r"['\"”]+?\s*?\.", ".”", text)
+#     text, ww_count = re.subn(r"\.\s*?['\"”]+", ".”", text)
+#     # Force any ' at the end of a sentence to be a smart quote
+#     text, l_count = re.subn(r"([\.\?!])'", r"\1”", text)
+#
 #     # Force double straight quotes to smart
 #     text, d_count = re.subn(r'"([^"]+?)"', r'“\1”', text)
 #
 #     # Single Quotes: 'Text' -> “Text” (Excluding contractions like I'm)
-#     text, s_count = re.subn(r"(\s|^)'(.+?)'(\s|$|[.,!?;])", r'\1“\2”\3', text)
+#     text, s_count = re.subn(r"(\s|^)'([\s\S]+?)'(\s|$|[.,!?;])", r'\1“\2”\3', text)
 #
 #     # Double-Double Quotes: ""Text"" -> "Quote"
 #     text, dd_count = re.subn(r'""([^"]+?)""', r'“\1”', text)
@@ -78,9 +85,33 @@ import re
 #     # Any remaining "
 #     text, ar_count = re.subn(r'"', '”', text)
 #
-#     stats["quote_normalizations"] = d_count + s_count + dd_count + ar_count
+#     stats["quote_normalizations"] = w_count + ww_count + d_count + s_count + dd_count + ar_count + l_count
 #
-#     return " ".join(text.split()), stats
+#     # Rescue broken paragraphs that end with " but don't start with one
+#     paragraphs = text.split('\n')
+#     healed_paragraphs = []
+#     for para in paragraphs:
+#         p = para.strip()
+#         if not p:
+#             healed_paragraphs.append("")
+#             continue
+#
+#         # Add a start quote mark if you find a closing one
+#         if re.search(r'[\.\?!][”"\'\’]$', p) and not re.match(r'^[*•\-\s]*?[“"\'\‘]', p):
+#             p = "“" + p
+#
+#         # Add a closing quote mark if you find an opening one
+#         if re.match(r'^[*•\-\s]*?[“"\'\‘]', p) and not re.search(r'[”"\'\’]$', p):
+#             if p[-1] in ['.', '!', '?']:
+#                 p = p + "”"
+#             else:
+#                 p = p + ".”"
+#
+#         healed_paragraphs.append(p)
+#
+#     text = '\n'.join(healed_paragraphs)
+#
+#     return text.strip(), stats
 #
 # report = {"processed_rows": 0, "mojibake": 0, "quotes": 0}
 #
@@ -89,19 +120,20 @@ import re
 #       Function to iterate through and clean the text
 #       while tracking the progress
 #       """
-#     # Safety code
-#     if not isinstance(text, str) or len(text.strip()) == 0:
+#
+#       # Safety code
+#       if not isinstance(text, str) or len(text.strip()) == 0:
 #         return text
-
-#     # Run the cleanup and gather the stats
-#     cleaned, stats = text_repair(text)
 #
-#     # Update the report tracker
-#     report["processed_rows"] += 1
-#     report["mojibake"] += stats.get("mojibake_fixes", 0)
-#     report["quotes"] += stats.get("quote_normalizations", 0)
+#       # Run the cleanup and gather the stats
+#       cleaned, stats = text_repair(text)
 #
-#     return cleaned
+#       # Update the report tracker
+#       report["processed_rows"] += 1
+#       report["mojibake"] += stats.get("mojibake_fixes", 0)
+#       report["quotes"] += stats.get("quote_normalizations", 0)
+#
+#       return cleaned
 #
 # # Run on the df
 # print("Starting cleanup...")
@@ -118,11 +150,11 @@ import re
 #
 # # Save the cleaned text csv
 #
-# df.to_csv("clean_main_dataset_2.csv", index=False)
+# df.to_csv("clean_main_dataset_3.csv", index=False, quoting=1)
 
 # Read it back in
 
-df = pd.read_csv("clean_main_dataset_2.csv")
+df = pd.read_csv("clean_main_dataset_3.csv")
 
 # Load nlp models (no need to load _lg, coref calls this)
 
@@ -308,19 +340,19 @@ def process_row(text):
 
 # Run on a sample first to iterate on regex and cleaning and to debug
 
-# df_sample = df.sample(n=10).copy()
-# df_sample[['quotes', 'speakers', 'attribution', 'quote_count']] = df_sample['body_text'].progress_apply(
-#     lambda x: pd.Series(process_row(x))
-# )
-# pd.set_option('display.max_columns', None)
-# print(df_sample[['news_title', 'quotes', 'speakers', 'attribution', 'quote_count']])
+df_sample = df.head(10).copy()
+df_sample[['quotes', 'speakers', 'attribution', 'quote_count']] = df_sample['body_text'].progress_apply(
+    lambda x: pd.Series(process_row(x))
+)
+pd.set_option('display.max_columns', None)
+print(df_sample[['news_title', 'quotes', 'speakers', 'attribution', 'quote_count']])
+
+df_sample.to_csv("df_sample_2.csv", index=False)
 #
-# df_sample.to_csv("df_sample.csv", index=False)
-
-# Run on clean dataset and save results
-
-df[['quotes', 'speakers', 'attribution', 'quote_count']] = df['body_text'].progress_apply(lambda x: pd.Series(process_row(x)))
-
-# # Save results
-df.to_csv("quotes_speakers_coref.csv", index=False)
-print("Finished! Results saved")
+# # Run on clean dataset and save results
+#
+# df[['quotes', 'speakers', 'attribution', 'quote_count']] = df['body_text'].progress_apply(lambda x: pd.Series(process_row(x)))
+#
+# # # Save results
+# df.to_csv("quotes_speakers_coref_2.csv", index=False)
+# print("Finished! Results saved")
