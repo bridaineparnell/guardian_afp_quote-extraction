@@ -230,6 +230,10 @@ reassure
 reassured
 reassures
 reassuring
+recall
+recalls
+recalled
+recalling
 reckon
 reckoned
 reckoning
