@@ -19,30 +19,31 @@ quote_verb_boolean_string = ''.join(quote_verb_boolean_list)
 quote_verb_boolean_string = quote_verb_boolean_string[:-1]
 
 # All of this regex changed from the original after iterations
-any_quote = r'“[^”]+?”'
+#any_quote = r'"(?:[^"]|\n(?="))*?"'
+any_quote = r'(?<![a-zA-Z0-9])"(?:[^"]|\n(?="))*?"(?![a-zA-Z0-9])'
 
 # 1. Someone Said: [Quote] [Speaker] [Verb]
-re_quote_someone_said = r'({quote})\s*[,]?\s*((?:\w+\s+){{1,5}})({cue_verbs})'.format(
+re_quote_someone_said = r'({quote})\s*[,]?\s*([^"\.]{{1,50}}?)\s*({cue_verbs})'.format(
     quote=any_quote,
     cue_verbs=quote_verb_boolean_string)
 
 # 2. Said Someone: [Quote] [Verb] [Speaker]
-re_quote_said_someone = r'({quote})\s+({cue_verbs})\s+((?:\w+\s+){{1,5}})'.format(
+re_quote_said_someone = r'({quote})\s+({cue_verbs})\s+([^"\.]{{1,50}}?)'.format(
     quote=any_quote,
     cue_verbs=quote_verb_boolean_string)
 
 # 3. Someone Told Someone: [Speaker] [Verb] [Quote]
-re_quote_someone_told_someone = r'({quote})\s+([^\.!?“"‘\']+?)\s+({cue_verbs})\s+([^\.!?“"‘\']+?)'.format(
+re_quote_someone_told_someone = r'({quote})\s+([^"\.!?]{{1,50}}?)\s+({cue_verbs})\s+([^"\.!?]{{1,50}}?)'.format(
     quote=any_quote,
     cue_verbs=quote_verb_boolean_string)
 
 # 4. Colon Style: [Speaker] [Verb] : [Quote]
-re_quote_someone_said_colon = r'([^“"‘\'\n\.!?]+?)\s+({cue_verbs})(?:\s+\w+){{0,5}}\s*:\s*({quote})'.format(
+re_quote_someone_said_colon = r'([^"\n\.!?]+?)\s+({cue_verbs})(?:\s+\w+){{0,5}}\s*:\s*({quote})'.format(
     quote=any_quote,
     cue_verbs=quote_verb_boolean_string)
 
 # 5. Adding Colon: [Speaker] [Verb] adding : [Quote]
-re_quote_someone_said_adding_colon = r'([^“"‘\'\n\.!?]+?)\s+({cue_verbs})\s+adding\s*:\s*({quote})'.format(
+re_quote_someone_said_adding_colon = r'([^"\n\.!?]+?)\s+({cue_verbs})\s+adding\s*:\s*({quote})'.format(
     quote=any_quote,
     cue_verbs=quote_verb_boolean_string)
 
@@ -53,13 +54,13 @@ re_speaker_colon_quote = r'([A-Z][a-z]+(?:\s[A-Z][a-z]+){{0,2}})\s*:\s*({quote})
 
 # 7. Transcript Style: [Speaker]: [Text] (No quotation marks required)
 # This looks for a Capitalized Name at the start of a line/sentence followed by a colon
-re_transcript_style = r'(?:^|\n)([A-Z][a-z]+(?:\s[A-Z][a-z]+){0,2})\s*:\s*([^“"‘\'\n\.!?]+)'
+re_transcript_style = r'(?m)^([A-Z][a-z]+(?:\s[A-Z][a-z]+){0,2})\s*:\s*(.+)'
 
 
 # Define the helper variables to keep the rest of the script happy
 between_quotes = any_quote
 between_quotes_sentence_start = r'^' + any_quote
-between_quotes_ends_with_comma = r'(?:“[^”\n]+?,”|"[^"\n]+?,"|‘[^’\n]+?,\’|\'[^\'\n]+?,\')'
+between_quotes_ends_with_comma = r'"[^"\n]+?,"'
 
 # # This was the original regex before alterations and added pattern
 # re_quote_someone_said = \
