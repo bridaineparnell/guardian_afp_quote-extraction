@@ -1,6 +1,7 @@
 import os
 import sys
 import spacy
+import re
 
 # Commands to ensure cluster is correctly working
 try:
@@ -30,131 +31,10 @@ import coreferee
 from utils.quote_extraction import extract_quotes_and_sentence_speaker
 from utils.preprocessing import sentencise_text
 from tqdm import tqdm
-import re
 
-# df = pd.read_csv("main_dataset.csv")
-#
-# # First clean the text
-#
-# def text_repair(text):
-#     """
-#     Standardise the way quotes look across the set
-#     and sort out text encoding issues
-#     """
-#     # Safety code
-#     if not isinstance(text, str): return ""
-#     # Monitor the progress
-#     stats = {"mojibake_fixes": 0, "quote_normalizations": 0}
-#
-#     # Mojibake repair (Priority order matters)
-#     # The 'â€' often acts as a prefix for multiple types of marks
-#     mojibake_map = {
-#         "â€œ": "“",  # Opening double
-#         "â€": "”",  # Closing double (standard)
-#         "â€\x9d": "”",  # Closing double (variant)
-#         "â€": "”",  # Closing double (fallback for your 'wrong' result)
-#         "â€™": "'",  # Apostrophe
-#         "â€”": "—",  # Em dash
-#         "â€“": "–",  # En dash
-#         "Â": ""  # Strips the ghost space often found after quotes
-#     }
-#
-#     for bad, good in mojibake_map.items():
-#         count = text.count(bad)
-#         if count > 0:
-#             text = text.replace(bad, good)
-#             stats["mojibake_fixes"] += count
-#
-#     # Quote Normalization
-#
-#     # Pre - Normalization: Standardize complex endings(e.g., ".' or '." to.”)
-#     text, w_count = re.subn(r"['\"”]+?\s*?\.", ".”", text)
-#     text, ww_count = re.subn(r"\.\s*?['\"”]+", ".”", text)
-#     # Force any ' at the end of a sentence to be a smart quote
-#     text, l_count = re.subn(r"([\.\?!])'", r"\1”", text)
-#
-#     # Force double straight quotes to smart
-#     text, d_count = re.subn(r'"([^"]+?)"', r'“\1”', text)
-#
-#     # Single Quotes: 'Text' -> “Text” (Excluding contractions like I'm)
-#     text, s_count = re.subn(r"(\s|^)'([\s\S]+?)'(\s|$|[.,!?;])", r'\1“\2”\3', text)
-#
-#     # Double-Double Quotes: ""Text"" -> "Quote"
-#     text, dd_count = re.subn(r'""([^"]+?)""', r'“\1”', text)
-#
-#     # Any remaining "
-#     text, ar_count = re.subn(r'"', '”', text)
-#
-#     stats["quote_normalizations"] = w_count + ww_count + d_count + s_count + dd_count + ar_count + l_count
-#
-#     # Rescue broken paragraphs that end with " but don't start with one
-#     paragraphs = text.split('\n')
-#     healed_paragraphs = []
-#     for para in paragraphs:
-#         p = para.strip()
-#         if not p:
-#             healed_paragraphs.append("")
-#             continue
-#
-#         # Add a start quote mark if you find a closing one
-#         if re.search(r'[\.\?!][”"\'\’]$', p) and not re.match(r'^[*•\-\s]*?[“"\'\‘]', p):
-#             p = "“" + p
-#
-#         # Add a closing quote mark if you find an opening one
-#         if re.match(r'^[*•\-\s]*?[“"\'\‘]', p) and not re.search(r'[”"\'\’]$', p):
-#             if p[-1] in ['.', '!', '?']:
-#                 p = p + "”"
-#             else:
-#                 p = p + ".”"
-#
-#         healed_paragraphs.append(p)
-#
-#     text = '\n'.join(healed_paragraphs)
-#
-#     return text.strip(), stats
-#
-# report = {"processed_rows": 0, "mojibake": 0, "quotes": 0}
-#
-# def clean_and_track(text):
-#       """
-#       Function to iterate through and clean the text
-#       while tracking the progress
-#       """
-#
-#       # Safety code
-#       if not isinstance(text, str) or len(text.strip()) == 0:
-#         return text
-#
-#       # Run the cleanup and gather the stats
-#       cleaned, stats = text_repair(text)
-#
-#       # Update the report tracker
-#       report["processed_rows"] += 1
-#       report["mojibake"] += stats.get("mojibake_fixes", 0)
-#       report["quotes"] += stats.get("quote_normalizations", 0)
-#
-#       return cleaned
-#
-# # Run on the df
-# print("Starting cleanup...")
-# df['body_text'] = df['body_text'].apply(clean_and_track)
-#
-# # Report results of cleanup
-# print("\n" + "="*40)
-# print("FINAL CLEANUP REPORT")
-# print("="*40)
-# print(f"Total Rows Processed:   {report['processed_rows']}")
-# print(f"Mojibake Fixed:        {report['mojibake']}")
-# print(f"Quote Normalizations:  {report['quotes']}")
-# print("="*40)
-#
-# # Save the cleaned text csv
-#
-# df.to_csv("clean_main_dataset_3.csv", index=False, quoting=1)
+# Read in data
 
-# Read it back in
-
-df = pd.read_csv("clean_main_dataset_3.csv")
+df = pd.read_csv("clean_main_dataset_6.csv")
 
 # Load nlp models (no need to load _lg, coref calls this)
 
@@ -166,7 +46,112 @@ nlp_trf.add_pipe("coreferee")
 
 tqdm.pandas(desc="Extracting Quotes")
 
+# Create a map/dictionary of all entities in a text
+
+AI_KEYWORDS = {'chatgpt', 'bot', 'system', 'model', 'ai', 'algorithm', 'robot', 'chatbot', 'gemini', 'app'}
+IDENTITY_LABELS = ['PERSON', 'ORG', 'NORP']
+FORBIDDEN_LABELS = {'GPE', 'LOC', 'FAC'}
+# Use the verb list to find active speakers
+with open('utils/quote_verb_list.txt', 'r') as f:
+    # Use lemmas (root words) for the best matching results
+    ATTRIBUTION_VERBS = {line.strip().lower() for line in f if line.strip()}
+# Adverbs and particles that often get trapped in speaker extraction
+ATTRIBUTION_NOISE = {'later', 'then', 'also', 'now', 'here', 'however', 'finally', 'since', 'originally'}
+REGISTRY_NOISE = {'principle', 'likely', 'actually', 'indeed', 'thought', 'course', 't', 's'}
+
+def entity_registry(doc, registry):
+    """
+    Find entities in the text, including AIs
+    """
+    # Use the ent label from Spacy
+    for ent in doc.ents:
+        if ent.label_ in IDENTITY_LABELS or ent.label_ in FORBIDDEN_LABELS:
+            full_name = ent.text.strip()
+
+            # GUARD: Ignore single letters or specific noise words tagged as entities
+            if len(full_name) < 2 or full_name.lower() in REGISTRY_NOISE:
+                continue
+
+            # Look for appositives using universal dependencies from Spacy
+            # First, look before the name
+            prefix = []
+            for i in range(ent.start - 1, -1, -1):
+                if i < ent.start - 6: break # Max 5 words back
+                word = doc[i].text
+                if doc[i].pos_ in ['NOUN', 'ADJ', 'PROPN'] and word.lower() not in full_name.lower():
+                    prefix.insert(0, word)
+                else:
+                    break
+
+            # The 'child' is based on dependency trees
+            appos = ""
+            for child in ent.root.children:
+                if child.dep_ == "appos":
+                    appos = "".join([t.text_with_ws for t in child.subtree]).strip()
+
+            full_identity = " ".join(prefix + [full_name]).strip()
+
+            if appos:
+                full_identity = f"{full_identity} ({appos})"
+
+            # Only save if it's better and keep its label
+            existing = registry.get(full_name, {}).get('text', "")
+            if len(full_identity) >= len(existing):
+                registry[full_name] = {'text': full_identity, 'label': ent.label_}
+
+            # Make sure that the logic doesn't just end if it finds a surname, it looks for more
+            if ent.label_ == "PERSON" and " " in full_name:
+                surname = full_name.split()[-1]
+                if len(full_identity) >= len(registry.get(surname, {}).get('text', "")):
+                    registry[surname] = {'text': full_identity, 'label': 'PERSON'}
+
+    # Now check if it's an AI that's 'speaking'
+    for token in doc:
+        if token.text.lower() in AI_KEYWORDS and token.ent_type_ == "":
+            name = token.text
+            identity_text = f"{name} (AI {name if name.lower() != 'system' else 'model'})"
+
+            # Use .get().get() to safely check the length of existing registry entries
+            existing_entry_text = registry.get(name, {}).get('text', "")
+
+            if len(identity_text) >= len(existing_entry_text):
+                # Save as a dictionary to match the PERSON/ORG entries
+                registry[name] = {
+                    'text': identity_text,
+                    'label': 'AI'  # This label tells the memory track where to put it
+                }
+
+def registry_resolve(speaker_text, registry):
+    """
+    Run the speakers through the registry to get the best version of their identity
+    """
+    # Safety check
+    if not speaker_text or speaker_text == "Unknown":
+        return "Unknown"
+
+    # Clean the text
+    cleaned = speaker_text.strip().lower()
+
+    # Look in the registry for the person or entity. If they're in the registry,
+    # return the best version of identity from the registry.
+    for key, val in registry.items():
+        if cleaned == key.lower() or cleaned == f"the {key.lower()}":
+            return val['text']
+
+    # Substring match
+    sorted_keys = sorted(registry.keys(), key=len, reverse=True)
+    for key in sorted_keys:
+        k_low = key.lower()
+        # Check if the cleaned name is actually INSIDE the registry key
+        if cleaned in k_low and len(cleaned) > 3:
+            if registry[key].get('label') in FORBIDDEN_LABELS and cleaned not in k_low:
+                continue
+            return registry[key]['text']
+
+    return speaker_text
+
 # Get quotes and speakers
+
 def resolve_with_coreferee(doc, raw_speaker_text, quote_text):
     """
     If pronoun, resolve the name,
@@ -177,13 +162,14 @@ def resolve_with_coreferee(doc, raw_speaker_text, quote_text):
         return raw_speaker_text
 
     # Find the quote in the chunk
-    quote_start_char = doc.text.find(quote_text[:50])
-
+    quote_start_char = doc.text.find(quote_text[:30])
     target_token = None
     min_dist = 9999999
 
+    clean_raw = raw_speaker_text.lower().strip()
+
     for token in doc:
-        if token.text.lower() == raw_speaker_text.lower():
+        if token.text.lower() == clean_raw or token.lemma_.lower() == clean_raw:
             # Calculate distance between potential speaker and the quote
             dist = abs(token.idx - quote_start_char)
             if dist < min_dist:
@@ -193,8 +179,8 @@ def resolve_with_coreferee(doc, raw_speaker_text, quote_text):
     if target_token is None:
         return raw_speaker_text
 
-        # Now that we have the nearest potential speaker,
-        # Coreferee looks at its internal chain map to find the name.
+    # Now that we have the nearest potential speaker,
+    # Coreferee looks at its internal chain map to find the name.
     resolved = doc._.coref_chains.resolve(target_token)
 
     if resolved:
@@ -202,12 +188,17 @@ def resolve_with_coreferee(doc, raw_speaker_text, quote_text):
         return " ".join([t.text for t in resolved])
 
     # Fallback in case 'it' fails to resolve because it's an AI
-    if target_token and raw_speaker_text.lower() == 'it':
-        ai_keywords = ['chatgpt', 'bot', 'system', 'model', 'ai', 'algorithm', 'robot', 'chatbot', 'gemini']
-        # Look at the 10 tokens before the quote
-        for i in range(max(0, target_token.i - 10), target_token.i):
-            if doc[i].text.lower() in ai_keywords:
-                return doc[i].text
+    search_terms = [raw_speaker_text.lower()]
+    if raw_speaker_text.lower() in ['it', 'the bot', 'the model', 'the system']:
+        search_terms.extend(AI_KEYWORDS)
+
+    # Look at the tokens surrounding the speaker for an AI keyword
+    start_search = max(0, target_token.i - 10)
+    end_search = min(len(doc), target_token.i + 5)
+
+    for i in range(start_search, end_search):
+        if doc[i].text.lower() in AI_KEYWORDS:
+            return doc[i].text  # Return 'ChatGPT' or 'Gemini'
 
     return raw_speaker_text
 
@@ -245,69 +236,196 @@ def clean_speaker_name(name_str):
     if not name_str:
         return "Unknown"
 
-    # Remove leading/trailing whitespace and common trailing punctuation
-    clean = name_str.strip().strip(',.:; ')
+    # Strip trailing punctuation and whitespace
+    clean = re.sub(r"(\'s|\(.*\))", "", name_str).strip(' ,.:;”"\'').strip()
 
-    # If the regex grabbed a whole sentence (more than 5 words)
-    # Use spacy to find the actual Person/Org inside that mess
+    # GUARD: If it's 2 characters and doesn't start with a capital, it's not a speaker
+    if len(clean) < 2: return "Unknown"
+    if len(clean) == 2 and not clean[0].isupper(): return "Unknown"
+
+    # Check for messy/long strings (more than 5 words)
     if len(clean.split()) > 5:
         temp_doc = nlp_light(clean)
-        # Grab the first entity found in the messy string
-        ents = [e.text for e in temp_doc.ents if e.label_ in ['PERSON', 'ORG','NORP', 'FAC', 'GPE', 'PRODUCT', 'WORK_OF_ART']]
+
+        # Check for entities
+        ents = [e.text for e in temp_doc.ents if e.label_ in IDENTITY_LABELS]
         if ents:
             return ents[0]
-        else:
-            # If no entity, it's probably just noise (like "it was claimed")
-            return "Unknown"
 
-    # Stop-word filter
-    if clean.lower() in ['and', 'the', 'that', 'which', 'when']:
+        # Check for AIs
+        for token in temp_doc:
+            if token.text.lower() in AI_KEYWORDS:
+                return token.text
+
         return "Unknown"
 
-    return clean
+    # Discard if the speaker starts with a conjunction or preposition
+    # journalists often use "But he said..." or "To which he added..."
+    lower_words = clean.lower().split()
+    if lower_words[0] in {'but', 'and', 'to', 'for', 'with', 'when', 'is', 'of'}:
+        # If it's a long phrase starting with 'but', try to find the entity inside
+        if len(lower_words) > 1:
+            clean = " ".join(clean.split()[1:]) # Remove the first word
+        else:
+            return "Unknown"
 
-def process_row(text):
+    # Clean off verbs in case they were grabbed
+    words = clean.split()
+    cleaned_words = [
+        w for w in words
+        if w.lower().strip() not in ATTRIBUTION_VERBS
+           and w.lower().strip() not in ATTRIBUTION_NOISE
+    ]
+
+    # Remove duplicates in titles
+    seen = set()
+    deduped_words = []
+    for w in cleaned_words:
+        if w.lower() not in seen:
+            deduped_words.append(w)
+            seen.add(w.lower())
+
+    final_name = " ".join(deduped_words).strip()
+
+    return final_name
+
+def process_row(row):
     """
-    Go through the df row by row, grabbing the articles
-    chunk them, get the quotes and speakers
+    Go through the df row by row, grabbing the articles and rids,
+    chunk the text, get the quotes and speakers
     throw the speakers to coref to resolve
     return two lists of quotes and speakers
     and a dictionary of attributed quotes:speaker
     """
+    text = row['body_text']
+    rid = row.get('rid', 'unknown')
+    pronouns = {'he', 'she', 'they', 'it', 'who'}
+
     # Safety code
     if not text or pd.isna(text):
         return [], [], {}, 0 # Return empty variables to avoid series size errors
 
+    # Keep track of the last known speaker
+    last_person = ["Unknown", -999]
+    last_org = ["Unknown", -999]
+    last_ai = ["Unknown", -999]
+
+    DECAY_THRESHOLD = 400
+
+    # Initialise the registry
+    id_registry = {}
+    # Store quotes, speakers
+    temp_quotes = []
+    temp_speakers = []
+    current_token_offset = 0
+
     # Create chunks <512 for the transformer, but overlap so we don't miss anything
     chunks = overlapping_chunks(text, chunk_size=400, overlap=100)
-
-    # Start lists for quotes and speakers
-    quotes = []
-    speakers = []
 
     # Run the quote extraction
     for chunk in chunks:
         doc = nlp_trf(chunk)
 
+        # Update the registry with any entities found
+        entity_registry(doc, id_registry)
+
+        # Update memory with the first entity found in this chunk
+        # This is probably the 'current' subject
+        for token in doc:
+            g_idx = current_token_offset + token.i
+
+            if token.dep_ == "nsubj":
+                label = token.ent_type_
+                full_id = id_registry.get(token.text, {}).get('text', token.text)
+
+                # Track Persons
+                if label == 'PERSON' and label not in FORBIDDEN_LABELS:
+                    last_person = [full_id, g_idx]
+                # Track Organizations
+                elif token.head.lemma_.lower() in ATTRIBUTION_VERBS:
+                    if label in {'ORG', 'NORP'} and label not in FORBIDDEN_LABELS:
+                        last_org = [full_id, g_idx]
+                    # Track AI
+                    elif token.text.lower() in AI_KEYWORDS:
+                        last_ai = [full_id, g_idx]
+
+        # Extract quotes
         results, _ = extract_quotes_and_sentence_speaker(chunk, nlp_trf, debug=False)
 
         # Gather quotes and speakers
         for item in results:
             q = item.quote_text if hasattr(item, 'quote_text') else item[0]
+
+            # Only keep if the quote has 3 or more words
+            words_in_quote = q.strip('“”" ').split()
+            if len(words_in_quote) < 2:
+                continue  # Skip this quote
+
+            # Find the approximate global index of the quote
+            # We use the start of the quote within the chunk
+            quote_chunk_idx = chunk.find(q[:20])
+            # Convert character index to rough token index (char_idx / 4)
+            global_quote_idx = current_token_offset + (quote_chunk_idx // 4)
+
             s = item.speaker if hasattr(item, 'speaker') else item[1]
-
-            # Hand off resolution to Coreferee
-            resolved_s = resolve_with_coreferee(doc, s, q)
-
             # Clean up speakers
-            final_s = clean_speaker_name(resolved_s)
+            clean_s = clean_speaker_name(s)
 
-            quotes.append(q)
-            speakers.append(final_s)
+            # Hand off resolution to Coreferee for specific categories
+            low_s = clean_s.lower()
+
+            # Resolve Pronouns to their specific category
+            resolved_s = "Unknown"
+
+            if low_s in {'he', 'she'}:
+                # Try Coreferee first
+                resolved_s = resolve_with_coreferee(doc, clean_s, q)
+                # Fallback only to a PERSON
+                if resolved_s.lower() in {'he', 'she'}:
+                    if global_quote_idx - last_person[1] < DECAY_THRESHOLD:
+                        resolved_s = last_person[0]
+
+            elif low_s in {'it', 'the system', 'the bot', 'the app'}:
+                resolved_s = resolve_with_coreferee(doc, clean_s, q)
+                # Fallback to AI first, then ORG
+                if resolved_s.lower() in {'it', 'the system', 'the bot', 'the app'}:
+                    if global_quote_idx - last_ai[1] < DECAY_THRESHOLD:
+                        resolved_s = last_ai[0]
+                    elif global_quote_idx - last_org[1] < DECAY_THRESHOLD:
+                        resolved_s = last_org[0]
+
+            elif low_s in {'they', 'the company', 'the team'}:
+                if global_quote_idx - last_org[1] < DECAY_THRESHOLD:
+                    resolved_s = last_org[0]
+                elif global_quote_idx - last_person[1] < DECAY_THRESHOLD:
+                    resolved_s = last_person[0]
+
+            else:
+                resolved_s = clean_s
+
+            # Look in registry for best match
+            final_s = registry_resolve(resolved_s, id_registry)
+
+            temp_quotes.append(q)
+            temp_speakers.append(final_s)
+
+            # Update memory to this speaker for the next quote
+            if final_s != "Unknown":
+                # Find the label for final_s to know which track to update
+                entry = next((v for k, v in id_registry.items() if v['text'] == final_s), None)
+                if entry:
+                    if entry['label'] == 'PERSON':
+                        last_person = [final_s, global_quote_idx]
+                    elif entry['label'] in {'ORG', 'NORP'}:
+                        last_org = [final_s, global_quote_idx]
+                elif low_s in AI_KEYWORDS:
+                    last_ai = [final_s, global_quote_idx]
+
+        current_token_offset += (len(doc) - 100)
 
     # Deduplicate quotes across the whole article
     quote_map = {}
-    for q, s in zip(quotes, speakers):
+    for q, s in zip(temp_quotes, temp_speakers):
         if q not in quote_map:
             quote_map[q] = []
         quote_map[q].append(s)
@@ -319,7 +437,6 @@ def process_row(text):
     # Find the best speaker
 
     for q_text, s_list in quote_map.items():
-        pronouns = {'he', 'she', 'they', 'it', 'who'}
         candidates = [name for name in s_list if "Unknown" not in name]
 
         if not candidates:
@@ -333,26 +450,39 @@ def process_row(text):
 
     # Monitor the progress
     status_icon = "✅" if final_quotes else "❌"
-    print(f"{status_icon} Quotes: {len(final_quotes)}")
+    print(f"{status_icon} RID {rid} | Quotes: {len(final_quotes)}")
 
     return final_quotes, final_speakers, matched, len(final_quotes)
 
 
 # Run on a sample first to iterate on regex and cleaning and to debug
 
-df_sample = df.head(10).copy()
-df_sample[['quotes', 'speakers', 'attribution', 'quote_count']] = df_sample['body_text'].progress_apply(
-    lambda x: pd.Series(process_row(x))
+df_sample = df.iloc[11:15].copy()
+df_sample[['quotes', 'speakers', 'attribution', 'quote_count']] = df_sample.progress_apply(
+    lambda row: pd.Series(process_row(row)), axis=1
 )
-pd.set_option('display.max_columns', None)
-print(df_sample[['news_title', 'quotes', 'speakers', 'attribution', 'quote_count']])
 
-df_sample.to_csv("df_sample_2.csv", index=False)
+def unique_speakers(speakers):
+    if isinstance(speakers, list):
+        return list(set(speakers))
+    return []
+
+df_sample['unique_speakers'] = df_sample['speakers'].apply(unique_speakers)
+
+pd.set_option('display.max_columns', None)
+print(df_sample[['news_title', 'quotes', 'speakers', 'attribution', 'quote_count', 'unique_speakers']])
+
+df_sample.to_csv("df_sample_6.csv", index=False)
+
 #
 # # Run on clean dataset and save results
 #
 # df[['quotes', 'speakers', 'attribution', 'quote_count']] = df['body_text'].progress_apply(lambda x: pd.Series(process_row(x)))
 #
+# all_speakers_ever = set([s for sublist in df['speakers'] for s in sublist])
+#
+# print(f"Total unique speakers identified in corpus: {len(all_speakers_ever)}")
+
 # # # Save results
 # df.to_csv("quotes_speakers_coref_2.csv", index=False)
 # print("Finished! Results saved")

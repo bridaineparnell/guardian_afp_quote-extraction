@@ -242,10 +242,6 @@ reconfirm
 reconfirmed
 reconfirming
 reconfirms
-release
-released
-releases
-releasing
 remind
 reminded
 reminding
