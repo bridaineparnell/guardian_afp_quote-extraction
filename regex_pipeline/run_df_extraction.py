@@ -38,7 +38,7 @@ df = pd.read_csv("clean_main_dataset_6.csv")
 
 # Load nlp models (no need to load _lg, coref calls this)
 
-nlp_light = spacy.load('en_core_web_sm')
+nlp_light = spacy.load('en_core_web_md')
 nlp_trf = spacy.load("en_core_web_trf")
 nlp_trf.add_pipe("coreferee")
 
@@ -55,6 +55,9 @@ FORBIDDEN_LABELS = {'GPE', 'LOC', 'FAC'}
 with open('utils/quote_verb_list.txt', 'r') as f:
     # Use lemmas (root words) for the best matching results
     ATTRIBUTION_VERBS = {line.strip().lower() for line in f if line.strip()}
+
+print (f'Length AV is {len(ATTRIBUTION_VERBS)}')
+
 # Adverbs and particles that often get trapped in speaker extraction
 ATTRIBUTION_NOISE = {'later', 'then', 'also', 'now', 'here', 'however', 'finally', 'since', 'originally'}
 REGISTRY_NOISE = {'principle', 'likely', 'actually', 'indeed', 'thought', 'course', 't', 's'}
@@ -298,6 +301,7 @@ def process_row(row):
     and a dictionary of attributed quotes:speaker
     """
     text = row['body_text']
+    print(f"Processing RID {row['rid']}: Text length {len(text)}")
     rid = row.get('rid', 'unknown')
     pronouns = {'he', 'she', 'they', 'it', 'who'}
 
@@ -351,6 +355,13 @@ def process_row(row):
 
         # Extract quotes
         results, _ = extract_quotes_and_sentence_speaker(chunk, nlp_trf, debug=False)
+
+        print(f"RAW EXTRACTION CHECK | RID: {rid} | Results Object: {results}")
+        if not results:
+            print(f"INFO: Chunk for RID {rid} had 0 quotes (skipping to next chunk).")
+        else:
+            print(f"DEBUG: Chunk for RID {rid} found {len(results)} quotes.")
+        sys.stdout.flush()
 
         # Gather quotes and speakers
         for item in results:
@@ -451,15 +462,36 @@ def process_row(row):
     # Monitor the progress
     status_icon = "✅" if final_quotes else "❌"
     print(f"{status_icon} RID {rid} | Quotes: {len(final_quotes)}")
+    sys.stdout.flush()
 
     return final_quotes, final_speakers, matched, len(final_quotes)
 
 
 # Run on a sample first to iterate on regex and cleaning and to debug
 
-df_sample = df.iloc[11:15].copy()
-df_sample[['quotes', 'speakers', 'attribution', 'quote_count']] = df_sample.progress_apply(
-    lambda row: pd.Series(process_row(row)), axis=1
+# df_sample = df.iloc[0:5].copy()
+# df_sample[['quotes', 'speakers', 'attribution', 'quote_count']] = df_sample.progress_apply(
+#     lambda row: pd.Series(process_row(row)), axis=1
+# )
+#
+# def unique_speakers(speakers):
+#     if isinstance(speakers, list):
+#         return list(set(speakers))
+#     return []
+#
+# df_sample['unique_speakers'] = df_sample['speakers'].apply(unique_speakers)
+#
+# pd.set_option('display.max_columns', None)
+# print(df_sample[['news_title', 'quotes', 'speakers', 'attribution', 'quote_count', 'unique_speakers']])
+#
+# df_sample.to_csv("df_sample_7.csv", index=False)
+
+
+# Run on clean dataset and save results
+
+df[['quotes', 'speakers', 'attribution', 'quote_count']] = df.progress_apply(
+    lambda row: pd.Series(process_row(row)),
+    axis=1
 )
 
 def unique_speakers(speakers):
@@ -467,22 +499,8 @@ def unique_speakers(speakers):
         return list(set(speakers))
     return []
 
-df_sample['unique_speakers'] = df_sample['speakers'].apply(unique_speakers)
+df['unique_speakers'] = df['speakers'].apply(unique_speakers)
 
-pd.set_option('display.max_columns', None)
-print(df_sample[['news_title', 'quotes', 'speakers', 'attribution', 'quote_count', 'unique_speakers']])
-
-df_sample.to_csv("df_sample_6.csv", index=False)
-
-#
-# # Run on clean dataset and save results
-#
-# df[['quotes', 'speakers', 'attribution', 'quote_count']] = df['body_text'].progress_apply(lambda x: pd.Series(process_row(x)))
-#
-# all_speakers_ever = set([s for sublist in df['speakers'] for s in sublist])
-#
-# print(f"Total unique speakers identified in corpus: {len(all_speakers_ever)}")
-
-# # # Save results
-# df.to_csv("quotes_speakers_coref_2.csv", index=False)
-# print("Finished! Results saved")
+# # Save results
+df.to_csv("quotes_speakers_coref_3.csv", index=False)
+print("Finished! Results saved")

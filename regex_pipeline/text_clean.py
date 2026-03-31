@@ -39,7 +39,6 @@ def text_repair(text):
     # Single to double quotes
     text, so_count = re.subn(r"(^|[\s:;—\(\[])'([a-zA-Z0-9])", r'\1"\2', text)  # Opening
     text, sc_count = re.subn(r"([^s])'([\s\.,!?;]|$)", r'\1"\2', text) # Closing
-    #text, sd_count = re.subn(r"(?<![a-zA-Z])'|'(?![a-zA-Z])", '"', text)
     stats["quote_normalisations"] = so_count + sc_count
 
     # Collapse whitespaces
